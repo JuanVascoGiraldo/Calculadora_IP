@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Calculadora de Subneteo por Subredes</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #f8f9fa;
+            padding-top: 50px;
+        }
+        .container {
+            background-color: #ffffff;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            color: #007bff;
+            margin-bottom: 30px;
+        }
+        .form-label {
+            font-weight: bold;
+        }
+        .result-box {
+            background-color: #e9ecef;
+            padding: 20px;
+            border-radius: 8px;
+            margin-top: 30px;
+        }
+        .result-box p {
+            margin-bottom: 5px;
+        }
+        .alert {
+            margin-top: 20px;
+        }
+        .subnet-detail {
+            border: 1px solid #dee2e6;
+            padding: 15px;
+            margin-bottom: 10px;
+            border-radius: 5px;
+            background-color: #f1f3f5;
+        }
+        .subnet-detail h5 {
+            color: #007bff;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="text-center">Calculadora de Subneteo por Número de Subredes</h1>
+        <div class="alert alert-info" role="alert">
+            Ingrese una dirección IP de red y su prefijo CIDR, junto con el número de subredes que desea crear. La calculadora mostrará los detalles de cada una de las nuevas subredes.
+        </div>
+        <div class="mb-3">
+            <label for="ipAddress" class="form-label">Dirección IP de Red Base:</label>
+            <input type="text" class="form-control" id="ipAddress" placeholder="Ej: 156.16.0.0">
+        </div>
+        <div class="mb-3">
+            <label for="cidr" class="form-label">Prefijo CIDR de la Red Base (Ej: /16):</label>
+            <input type="number" class="form-control" id="cidr" min="0" max="32" value="16">
+        </div>
+        <div class="mb-3">
+            <label for="numSubnetsRequired" class="form-label">Número de Subredes Requeridas:</label>
+            <input type="number" class="form-control" id="numSubnetsRequired" min="2" value="10">
+        </div>
+        <button type="button" class="btn btn-primary" onclick="calculateSubnets()">Calcular Subredes</button>
+        <a href="index.html" class="btn btn-secondary ms-2">Volver al Inicio</a>
+
+        <div id="result" class="result-box mt-4" style="display: none;">
+            <h4>Resumen de la Red Base:</h4>
+            <p><strong>IP de Red Base:</strong> <span id="originalIp"></span>/<span id="originalCidr"></span></p>
+            <p><strong>Número de Subredes Requeridas:</strong> <span id="reqSubnets"></span></p>
+            <p><strong>Número de Bits Prestados:</strong> <span id="borrowedBits"></span></p>
+            <p><strong>Número Total de Subredes Creadas:</strong> <span id="actualSubnets"></span></p>
+            <p><strong>Nuevo Prefijo CIDR de las Subredes:</strong> <span id="newCidr"></span></p>
+            <p><strong>Máscara de Subred de las Nuevas Subredes:</strong> <span id="newSubnetMask"></span></p>
+            <p><strong>Hosts Utilizables por Subred:</strong> <span id="usableHostsPerSubnet"></span></p>
+            <hr>
+            <h4>Detalle de las Nuevas Subredes:</h4>
+            <div id="subnetDetails">
+                </div>
+        </div>
+
+        <div id="errorMessage" class="alert alert-danger mt-4" style="display: none;">
+            </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // --- Helper functions ---
+        function ipToBinary(ip) {
+            const ipParts = ip.split('.');
+            if (ipParts.length !== 4) {
+                console.error("ipToBinary: Invalid IP format, expected 4 octets.", ip);
+                return '';
+            }
+            return ipParts.map(octet => {
+                const parsedOctet = parseInt(octet, 10);
+                if (isNaN(parsedOctet) || parsedOctet < 0 || parsedOctet > 255) {
+                    console.error(`ipToBinary: Invalid octet "${octet}" in IP "${ip}".`);
+                    return '';
+                }
+                let bin = parsedOctet.toString(2);
+                while (bin.length < 8) bin = '0' + bin;
+                return bin;
+            }).join('');
+        }
+
+        function binaryToIp(binary) {
+            if (binary.length !== 32) {
+                console.error("binaryToIp: Binary string must be 32 bits long. Got:", binary.length, "bits. String:", binary);
+                return '0.0.0.0';
+            }
+            const ipParts = [];
+            for (let i = 0; i < 4; i++) {
+                const octetBinary = binary.substring(i * 8, (i + 1) * 8);
+                const parsedOctet = parseInt(octetBinary, 2);
+                if (isNaN(parsedOctet)) {
+                    console.error(`binaryToIp: Error parsing binary octet "${octetBinary}".`);
+                    return '0.0.0.0';
+                }
+                ipParts.push(parsedOctet);
+            }
+            return ipParts.join('.');
+        }
+
+        function getSubnetMask(cidr) {
+            return binaryToIp('1'.repeat(cidr) + '0'.repeat(32 - cidr));
+        }
+
+        function calculateNetworkAddressFromBinary(ipBinary, cidr) {
+            return binaryToIp(ipBinary.substring(0, cidr) + '0'.repeat(32 - cidr));
+        }
+
+        function calculateBroadcastAddressFromBinary(ipBinary, cidr) {
+            return binaryToIp(ipBinary.substring(0, cidr) + '1'.repeat(32 - cidr));
+        }
+
+        function getFirstHost(networkAddress, cidr) {
+            if (cidr >= 31) { // /31 and /32 have no usable hosts
+                return "N/A (No hosts utilizables)";
+            }
+            const networkBinary = ipToBinary(networkAddress);
+            const firstHostDecimal = BigInt('0b' + networkBinary) + BigInt(1);
+            let firstHostBinary = firstHostDecimal.toString(2);
+            while (firstHostBinary.length < 32) {
+                firstHostBinary = '0' + firstHostBinary;
+            }
+            return binaryToIp(firstHostBinary);
+        }
+
+        function getLastHost(broadcastAddress, cidr) {
+            if (cidr >= 31) { // /31 and /32 have no usable hosts
+                return "N/A (No hosts utilizables)";
+            }
+            const broadcastBinary = ipToBinary(broadcastAddress);
+            const lastHostDecimal = BigInt('0b' + broadcastBinary) - BigInt(1);
+            let lastHostBinary = lastHostDecimal.toString(2);
+            while (lastHostBinary.length < 32) {
+                lastHostBinary = '0' + lastHostBinary;
+            }
+            return binaryToIp(lastHostBinary);
+        }
+        // --- End of Helper functions ---
+
+
+        function calculateSubnets() {
+            // Declarar las variables de elementos DOM al inicio de la función
+            const resultDiv = document.getElementById('result');
+            const errorMessageDiv = document.getElementById('errorMessage');
+            const subnetDetailsDiv = document.getElementById('subnetDetails'); // <-- Movido aquí
+
+            // Ocultar y limpiar resultados y errores previos
+            resultDiv.style.display = 'none';
+            errorMessageDiv.style.display = 'none';
+            errorMessageDiv.innerHTML = '';
+            subnetDetailsDiv.innerHTML = ''; 
+
+            const ipAddressInput = document.getElementById('ipAddress').value;
+            const cidrInput = parseInt(document.getElementById('cidr').value);
+            const numSubnetsRequired = parseInt(document.getElementById('numSubnetsRequired').value);
+
+            // --- Validation ---
+            const ipPattern = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+            if (!ipPattern.test(ipAddressInput)) {
+                errorMessageDiv.innerHTML = 'Por favor, ingrese una dirección IP de red base válida (Ej: 192.168.1.0).';
+                errorMessageDiv.style.display = 'block';
+                return;
+            }
+            const ipParts = ipAddressInput.split('.').map(Number);
+            if (ipParts.some(part => part < 0 || part > 255)) {
+                errorMessageDiv.innerHTML = 'Los octetos de la IP base deben estar entre 0 y 255.';
+                errorMessageDiv.style.display = 'block';
+                return;
+            }
+
+            if (isNaN(cidrInput) || cidrInput < 0 || cidrInput > 32) {
+                errorMessageDiv.innerHTML = 'Por favor, ingrese un prefijo CIDR base válido (0-32).';
+                errorMessageDiv.style.display = 'block';
+                return;
+            }
+
+            if (isNaN(numSubnetsRequired) || numSubnetsRequired < 2) { // Need at least 2 subnets to subnet
+                errorMessageDiv.innerHTML = 'Por favor, ingrese un número de subredes requeridas válido (mínimo 2).';
+                errorMessageDiv.style.display = 'block';
+                return;
+            }
+
+            // --- Calculate new CIDR based on required subnets ---
+            let borrowedBits = 0;
+            // Find the smallest 'borrowedBits' such that 2^borrowedBits >= numSubnetsRequired
+            while (Math.pow(2, borrowedBits) < numSubnetsRequired) {
+                borrowedBits++;
+            }
+
+            const newCidr = cidrInput + borrowedBits;
+
+            if (newCidr > 32) {
+                errorMessageDiv.innerHTML = `Error: No se pueden crear ${numSubnetsRequired} subredes con la IP base /${cidrInput}. El prefijo CIDR resultante (${newCidr}) excedería /32.`;
+                errorMessageDiv.style.display = 'block';
+                return;
+            }
+
+            // --- Check if the base IP is a network address ---
+            const baseIpBinary = ipToBinary(ipAddressInput);
+            const baseNetworkBinary = baseIpBinary.substring(0, cidrInput) + '0'.repeat(32 - cidrInput);
+            const isBaseNetworkAddress = (baseIpBinary === baseNetworkBinary);
+
+            if (!isBaseNetworkAddress) {
+                errorMessageDiv.innerHTML = `Advertencia: La IP base ingresada (${ipAddressInput}) no es una dirección de red para el prefijo /${cidrInput}. Se utilizará su dirección de red (${binaryToIp(baseNetworkBinary)}/${cidrInput}) como punto de partida.`;
+                errorMessageDiv.style.display = 'block';
+                // Update the input field to reflect the corrected base network address
+                document.getElementById('ipAddress').value = binaryToIp(baseNetworkBinary);
+            }
+
+            // --- Calculate Subnet Details ---
+            const subnetMask = getSubnetMask(newCidr);
+            const actualNumSubnetsCreated = Math.pow(2, borrowedBits);
+            const usableHostsPerSubnet = (32 - newCidr >= 2) ? (Math.pow(2, (32 - newCidr)) - 2) : 0; // 0 for /31 and /32
+
+            document.getElementById('originalIp').innerText = ipAddressInput; // Original input
+            document.getElementById('originalCidr').innerText = cidrInput;
+            document.getElementById('reqSubnets').innerText = numSubnetsRequired;
+            document.getElementById('borrowedBits').innerText = borrowedBits;
+            document.getElementById('actualSubnets').innerText = actualNumSubnetsCreated;
+            document.getElementById('newCidr').innerText = `/${newCidr}`;
+            document.getElementById('newSubnetMask').innerText = subnetMask;
+            document.getElementById('usableHostsPerSubnet').innerText = usableHostsPerSubnet;
+
+            // Generate details for each subnet
+            // Start from the true base network address, converted to BigInt for safe arithmetic
+            let currentSubnetDecimalBigInt = BigInt('0b' + baseNetworkBinary);
+
+            for (let i = 0; i < actualNumSubnetsCreated; i++) {
+                // Convert current BigInt to 32-bit binary string
+                let currentSubnetBinary = currentSubnetDecimalBigInt.toString(2);
+                while (currentSubnetBinary.length < 32) {
+                    currentSubnetBinary = '0' + currentSubnetBinary;
+                }
+
+                // Calculate addresses for the current subnet
+                const networkAddress = calculateNetworkAddressFromBinary(currentSubnetBinary, newCidr);
+                const broadcastAddress = calculateBroadcastAddressFromBinary(currentSubnetBinary, newCidr);
+                const firstHost = getFirstHost(networkAddress, newCidr);
+                const lastHost = getLastHost(broadcastAddress, newCidr);
+
+                // Create and append the subnet detail div
+                const subnetDiv = document.createElement('div');
+                subnetDiv.className = 'subnet-detail';
+                subnetDiv.innerHTML = `
+                    <h5>Subred ${i + 1}</h5>
+                    <p><strong>Dirección de Red:</strong> ${networkAddress}/${newCidr}</p>
+                    <p><strong>Máscara de Subred:</strong> ${subnetMask}</p>
+                    <p><strong>Rango de Hosts Válidos:</strong> ${firstHost} - ${lastHost}</p>
+                    <p><strong>Dirección de Broadcast:</strong> ${broadcastAddress}</p>
+                    <p><strong>Hosts Utilizables:</strong> ${usableHostsPerSubnet}</p>
+                `;
+                subnetDetailsDiv.appendChild(subnetDiv);
+
+                // Increment to the next subnet's network address using BigInt
+                const broadcastBinaryOfCurrentSubnet = ipToBinary(broadcastAddress);
+                currentSubnetDecimalBigInt = BigInt('0b' + broadcastBinaryOfCurrentSubnet) + BigInt(1);
+
+                // Stop after showing the number of subnets requested by the user
+                if (i + 1 >= numSubnetsRequired) {
+                    break;
+                }
+                // Check for overflow - if the next subnet's start exceeds the max 32-bit IP
+                if (currentSubnetDecimalBigInt > BigInt('0b' + '1'.repeat(32))) {
+                    console.warn("Reached maximum IP address, stopping subnet generation.");
+                    break;
+                }
+            }
+
+            resultDiv.style.display = 'block';
+        }
+    </script>
+</body>
+</html>

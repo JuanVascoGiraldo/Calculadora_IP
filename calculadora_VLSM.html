@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Calculadora VLSM</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #f8f9fa;
+            padding-top: 50px;
+        }
+        .container {
+            background-color: #ffffff;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            color: #28a745;
+            margin-bottom: 30px;
+        }
+        .form-label {
+            font-weight: bold;
+        }
+        .result-box {
+            background-color: #e9ecef;
+            padding: 20px;
+            border-radius: 8px;
+            margin-top: 30px;
+        }
+        .subnet-result {
+            margin-bottom: 20px;
+            padding: 15px;
+            border: 1px solid #ced4da;
+            border-radius: 5px;
+            background-color: #f1f3f5;
+        }
+        .subnet-result h5 {
+            color: #007bff;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="text-center">Calculadora VLSM</h1>
+        <div class="mb-3">
+            <label for="vlsmIpAddress" class="form-label">Dirección de Red Base (Ej: 192.168.0.0):</label>
+            <input type="text" class="form-control" id="vlsmIpAddress" placeholder="Ej: 192.168.0.0">
+        </div>
+        <div class="mb-3">
+            <label for="vlsmCidr" class="form-label">Prefijo CIDR de la Red Base (Ej: /24):</label>
+            <input type="number" class="form-control" id="vlsmCidr" min="0" max="32" value="24">
+        </div>
+        <div id="subnetHostRequests">
+            </div>
+        <button type="button" class="btn btn-info mt-3" onclick="addHostRequestInput()">Agregar Requisito de Hosts</button>
+        <button type="button" class="btn btn-success mt-3" onclick="calculateVLSM()">Calcular VLSM</button>
+        <a href="index.html" class="btn btn-secondary ms-2 mt-3">Volver al Inicio</a>
+
+        <div id="vlsmResult" class="result-box mt-4" style="display: none;">
+            <h4>Resultados del Subneteo VLSM:</h4>
+            <div id="subnetDetails">
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // Helper functions from CIDR calculator
+        function ipToBinary(ip) {
+            return ip.split('.').map(octet => {
+                let bin = parseInt(octet).toString(2);
+                while (bin.length < 8) bin = '0' + bin;
+                return bin;
+            }).join('');
+        }
+
+        function binaryToIp(binary) {
+            return Array.from({ length: 4 }, (_, i) => parseInt(binary.substring(i * 8, (i + 1) * 8), 2)).join('.');
+        }
+
+        function getSubnetMask(cidr) {
+            return binaryToIp('1'.repeat(cidr) + '0'.repeat(32 - cidr));
+        }
+
+        function getNetworkAddress(ipBinary, cidr) {
+            return binaryToIp(ipBinary.substring(0, cidr) + '0'.repeat(32 - cidr));
+        }
+
+        function getBroadcastAddress(ipBinary, cidr) {
+            return binaryToIp(ipBinary.substring(0, cidr) + '1'.repeat(32 - cidr));
+        }
+
+        function getFirstHost(networkBinary, cidr) {
+            if (32 - cidr === 0) return networkBinary; // No hosts for /32
+            return binaryToIp(networkBinary.substring(0, 31) + '1');
+        }
+
+        function getLastHost(broadcastAddress, cidr) {
+            const broadcastBinary = ipToBinary(broadcastAddress);
+            // If it's a /32 or /31, there are no usable hosts.
+            if (cidr >= 31) {
+                return "N/A (No hosts utilizables)";
+            }
+            // Subtract 1 from the binary representation of the broadcast address
+            // Convert binary to decimal, subtract 1, convert back to 32-bit binary
+            const lastHostDecimal = parseInt(broadcastBinary, 2) - 1;
+            let lastHostBinary = lastHostDecimal.toString(2);
+            while (lastHostBinary.length < 32) {
+                lastHostBinary = '0' + lastHostBinary;
+            }
+            return binaryToIp(lastHostBinary);
+        }
+
+        let subnetRequestCounter = 0;
+
+        function addHostRequestInput() {
+            subnetRequestCounter++;
+            const container = document.getElementById('subnetHostRequests');
+            const div = document.createElement('div');
+            div.className = 'mb-3 input-group';
+            div.innerHTML = `
+                <span class="input-group-text">Subred ${subnetRequestCounter} - Hosts Requeridos:</span>
+                <input type="number" class="form-control" id="hostsRequired${subnetRequestCounter}" min="1" value="10">
+                <button type="button" class="btn btn-danger" onclick="this.parentNode.remove()">X</button>
+            `;
+            container.appendChild(div);
+        }
+
+        // Add initial host request input on load
+        document.addEventListener('DOMContentLoaded', addHostRequestInput);
+
+
+        function calculateVLSM() {
+            const baseIpAddress = document.getElementById('vlsmIpAddress').value;
+            const baseCidr = parseInt(document.getElementById('vlsmCidr').value);
+
+            // Basic validation for base IP and CIDR
+            const ipPattern = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+            if (!ipPattern.test(baseIpAddress)) {
+                alert('Por favor, ingrese una dirección IP base válida (ej: 192.168.0.0).');
+                return;
+            }
+            const ipParts = baseIpAddress.split('.').map(Number);
+            if (ipParts.some(part => part < 0 || part > 255)) {
+                alert('Los octetos de la IP base deben estar entre 0 y 255.');
+                return;
+            }
+
+            if (isNaN(baseCidr) || baseCidr < 0 || baseCidr > 32) {
+                alert('Por favor, ingrese un prefijo CIDR base válido (0-32).');
+                return;
+            }
+
+            // Collect host requirements
+            const hostRequests = [];
+            for (let i = 1; i <= subnetRequestCounter; i++) {
+                const input = document.getElementById(`hostsRequired${i}`);
+                if (input) {
+                    const hosts = parseInt(input.value);
+                    if (isNaN(hosts) || hosts < 1) {
+                        alert(`El número de hosts para la subred ${i} debe ser un número positivo.`);
+                        return;
+                    }
+                    hostRequests.push(hosts);
+                }
+            }
+
+            if (hostRequests.length === 0) {
+                alert('Debe agregar al menos un requisito de hosts para las subredes.');
+                return;
+            }
+
+            // Sort host requests in descending order (VLSM principle)
+            hostRequests.sort((a, b) => b - a);
+
+            let currentNetworkBinary = ipToBinary(baseIpAddress);
+
+            const subnetDetailsDiv = document.getElementById('subnetDetails');
+            subnetDetailsDiv.innerHTML = ''; // Clear previous results
+
+            let insufficientSpace = false;
+
+            for (let i = 0; i < hostRequests.length; i++) {
+                const hostsNeeded = hostRequests[i];
+                // Calculate the smallest power of 2 that can accommodate hostsNeeded + 2 (for network and broadcast)
+                let requiredHostsActual = hostsNeeded + 2;
+                let powerOf2 = 0;
+                while (Math.pow(2, powerOf2) < requiredHostsActual) {
+                    powerOf2++;
+                }
+
+                const newHostBits = powerOf2;
+                const newCidr = 32 - newHostBits;
+
+                if (newCidr < baseCidr) {
+                    alert(`El prefijo CIDR calculado para la subred ${i + 1} (${newCidr}) es menor que el prefijo CIDR base (${baseCidr}). Esto indica que la red base es demasiado pequeña para acomodar esta subred. Ajuste la red base o los requisitos de hosts.`);
+                    insufficientSpace = true;
+                    break;
+                }
+
+                // Ensure the new network address aligns with the new CIDR
+                // This is crucial for VLSM
+                const alignedNetworkBinary = currentNetworkBinary.substring(0, newCidr) + '0'.repeat(32 - newCidr);
+                const alignedNetworkAddress = binaryToIp(alignedNetworkBinary);
+
+                // Check if the current network address is within the available space of the base network
+                const baseNetworkBinary = ipToBinary(baseIpAddress).substring(0, baseCidr) + '0'.repeat(32 - baseCidr);
+                const baseBroadcastBinary = ipToBinary(baseIpAddress).substring(0, baseCidr) + '1'.repeat(32 - baseCidr);
+
+                if (parseInt(alignedNetworkBinary, 2) < parseInt(baseNetworkBinary, 2) ||
+                    parseInt(getBroadcastAddress(alignedNetworkBinary, newCidr).split('.').map(o => parseInt(o, 10)).reduce((acc, val) => (acc << 8) + val), 10) > parseInt(baseBroadcastBinary.split('.').map(o => parseInt(o, 10)).reduce((acc, val) => (acc << 8) + val), 10)) {
+                    alert(`No hay suficiente espacio en la red base (${baseIpAddress}/${baseCidr}) para asignar la subred requerida de ${hostsNeeded} hosts.`);
+                    insufficientSpace = true;
+                    break;
+                }
+
+
+                const subnetMask = getSubnetMask(newCidr);
+                const broadcastAddress = getBroadcastAddress(alignedNetworkBinary, newCidr);
+                const firstHost = getFirstHost(alignedNetworkBinary, newCidr);
+                const lastHost = getLastHost(broadcastAddress, newCidr);
+                const usableHosts = Math.pow(2, newHostBits) - 2;
+
+                const subnetDiv = document.createElement('div');
+                subnetDiv.className = 'subnet-result';
+                subnetDiv.innerHTML = `
+                    <h5>Subred ${i + 1} (Hosts Requeridos: ${hostsNeeded})</h5>
+                    <p><strong>Dirección de Red:</strong> ${alignedNetworkAddress}/${newCidr}</p>
+                    <p><strong>Máscara de Subred:</strong> ${subnetMask}</p>
+                    <p><strong>Rango de Hosts Válidos:</strong> ${firstHost} - ${lastHost}</p>
+                    <p><strong>Dirección de Broadcast:</strong> ${broadcastAddress}</p>
+                    <p><strong>Hosts Utilizables:</strong> ${usableHosts}</p>
+                `;
+                subnetDetailsDiv.appendChild(subnetDiv);
+
+                // Update currentNetworkBinary for the next subnet
+                // The next network starts immediately after the broadcast of the current one.
+                const nextNetworkDecimal = parseInt(ipToBinary(broadcastAddress), 2) + 1;
+                if (nextNetworkDecimal > Math.pow(2, 32) - 1) { // Check for overflow
+                    insufficientSpace = true;
+                    alert('Se ha alcanzado el límite de direcciones IP disponibles.');
+                    break;
+                }
+                currentNetworkBinary = nextNetworkDecimal.toString(2);
+                while (currentNetworkBinary.length < 32) currentNetworkBinary = '0' + currentNetworkBinary;
+            }
+
+            document.getElementById('vlsmResult').style.display = 'block';
+            if (insufficientSpace) {
+                document.getElementById('vlsmResult').innerHTML = '<h4 class="text-danger">Error: No se pudo realizar el subneteo VLSM con los parámetros dados. Revise los requisitos de hosts y la red base.</h4>';
+            }
+        }
+    </script>
+</body>
+</html>
